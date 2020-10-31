@@ -22,7 +22,7 @@ class TargetSpace(object):
     >>> y = space.register_point(x)
     >>> assert self.max_point()['max_val'] == y
     """
-    def __init__(self, target_func, pbounds, random_state=None):
+    def __init__(self, target_func, pbounds, random_state=None,batch_size=1):
         """
         Parameters
         ----------
@@ -37,7 +37,7 @@ class TargetSpace(object):
             optionally specify a seed for a random number generator
         """
         self.random_state = ensure_rng(random_state)
-
+        self.batch_size=batch_size
         # The function to be optimized
         self.target_func = target_func
 
@@ -98,29 +98,30 @@ class TargetSpace(object):
         return np.asarray([params[key] for key in self.keys])
 
     def array_to_params(self, x):
-        try:
-            assert len(x) == len(self.keys)
-        except AssertionError:
-            raise ValueError(
-                "Size of array ({}) is different than the ".format(len(x)) +
-                "expected number of parameters ({}).".format(len(self.keys))
-            )
-        return dict(zip(self.keys, x))
+        if len(x) != len(self.keys):
+            return dict(zip(self.keys, x.T))
+        else:
+            return dict(zip(self.keys, x))
+        # except AssertionError:
+        #     raise ValueError(
+        #         "Size of array ({}) is different than the ".format(len(x)) +
+        #         "expected number of parameters ({}).".format(len(self.keys))
+        #     )
 
     def _as_array(self, x):
         try:
             x = np.asarray(x, dtype=float)
         except TypeError:
             x = self.params_to_array(x)
-
-        x = x.ravel()
-        try:
-            assert x.size == self.dim
-        except AssertionError:
-            raise ValueError(
-                "Size of array ({}) is different than the ".format(len(x)) +
-                "expected number of parameters ({}).".format(len(self.keys))
-            )
+        if len(x.T) == self.dim:
+            x = x.ravel()
+        # try:
+        #     assert len(x.T) == self.dim
+        # except AssertionError:
+        #     raise ValueError(
+        #         "Size of array ({}) is different than the ".format(len(x)) +
+        #         "expected number of parameters ({}).".format(len(self.keys))
+        #     )
         return x
 
     def register(self, params, target):
@@ -157,14 +158,15 @@ class TargetSpace(object):
         1
         """
         x = self._as_array(params)
-        if x in self:
-            raise KeyError('Data point {} is not unique'.format(x))
 
-        # Insert data into unique dictionary
         self._cache[_hashable(x.ravel())] = target
+        if self.dim==x.size:
+            self._params = np.concatenate([self._params, x.reshape(1,-1)])
+            self._target = np.concatenate([self._target, [target]])
+        else:
+            self._params =np.vstack([self._params, x.T])
+            self._target = np.concatenate([self._target, target])#.reshape(self.batch_size,-1)
 
-        self._params = np.concatenate([self._params, x.reshape(1, -1)])
-        self._target = np.concatenate([self._target, [target]])
 
     def probe(self, params):
         """
@@ -213,10 +215,15 @@ class TargetSpace(object):
         array([[ 55.33253689,   0.54488318]])
         """
         # TODO: support integer, category, and basic scipy.optimize constraints
-        data = np.empty((1, self.dim))
-        for col, (lower, upper) in enumerate(self._bounds):
-            data.T[col] = self.random_state.uniform(lower, upper, size=1)
-        return data.ravel()
+        # data = np.empty((1, self.dim))
+
+        # for col, (lower, upper) in enumerate(self._bounds):
+        #     data.T[col] = self.random_state.uniform(lower, upper, size=1)
+        # return data.ravel()
+        temp = []
+        for lower, upper in np.array(self._bounds):
+            temp.append(np.random.uniform(lower, upper, size=self.batch_size))
+        return np.vstack(temp).T.squeeze()
 
     def max(self):
         """Get maximum target value found and corresponding parametes."""

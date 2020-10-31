@@ -102,13 +102,14 @@ class BayesianOptimization(Observable):
         Allows changing the lower and upper searching bounds
     """
     def __init__(self, f, pbounds, random_state=None, verbose=2,
-                 bounds_transformer=None):
+                 bounds_transformer=None,n_restarts_optimizer=5,batch_size=1):
         self._random_state = ensure_rng(random_state)
 
         # Data structure containing the function to be optimized, the bounds of
         # its domain, and a record of the evaluations we have done so far
-        self._space = TargetSpace(f, pbounds, random_state)
-
+        self._space = TargetSpace(f, pbounds, random_state,batch_size=batch_size)
+        self._n_restarts_optimizer=n_restarts_optimizer
+        self._batch_size=batch_size
         self._queue = Queue()
 
         # Internal GP regressor
@@ -116,7 +117,7 @@ class BayesianOptimization(Observable):
             kernel=Matern(nu=2.5),
             alpha=1e-6,
             normalize_y=True,
-            n_restarts_optimizer=5,
+            n_restarts_optimizer=self._n_restarts_optimizer*self._batch_size,
             random_state=self._random_state,
         )
 

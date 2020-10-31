@@ -2,9 +2,33 @@ import warnings
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize
+from multiprocessing import Pool
 
 
-def acq_max(ac, gp, y_max, bounds, random_state, n_warmup=10000, n_iter=10):
+def process(args):
+    x_seeds=args['x_seeds']
+    max_acq=args['max_acq']
+    ac = args['ac']
+    gp = args['gp']
+    y_max = args['y_max']
+    x_max = args['x_max']
+    bounds = args['bounds']
+    for x_try in x_seeds:
+        # Find the minimum of minus the acquisition function
+        res = minimize(lambda x: -ac(x.reshape(1, -1), gp=gp, y_max=y_max),
+                       x_try.reshape(1, -1),
+                       bounds=bounds,
+                       method="L-BFGS-B")
+        # See if success
+        if not res.success:
+            continue
+        # Store it if better than previous minimum(maximum).
+        if max_acq is None or -res.fun[0] >= max_acq:
+            x_max = res.x
+            _max_acq = -res.fun[0]
+    return x_max
+
+def acq_max(ac, gp, y_max, bounds, random_state, n_warmup=10000, n_iter=10,batch_size=16):
     """
     A function to find the maximum of the acquisition function
 
@@ -49,26 +73,16 @@ def acq_max(ac, gp, y_max, bounds, random_state, n_warmup=10000, n_iter=10):
 
     # Explore the parameter space more throughly
     x_seeds = random_state.uniform(bounds[:, 0], bounds[:, 1],
-                                   size=(n_iter, bounds.shape[0]))
-    for x_try in x_seeds:
-        # Find the minimum of minus the acquisition function
-        res = minimize(lambda x: -ac(x.reshape(1, -1), gp=gp, y_max=y_max),
-                       x_try.reshape(1, -1),
-                       bounds=bounds,
-                       method="L-BFGS-B")
+                                   size=(batch_size,n_iter, bounds.shape[0])).squeeze()
 
-        # See if success
-        if not res.success:
-            continue
 
-        # Store it if better than previous minimum(maximum).
-        if max_acq is None or -res.fun[0] >= max_acq:
-            x_max = res.x
-            max_acq = -res.fun[0]
 
+    with Pool(batch_size) as p:
+        result=np.array(p.map(process, [ {"x_seeds":x_seeds[i],'max_acq':max_acq,"ac":ac,'bounds':bounds,
+                                "y_max":y_max,'x_max':x_max,"gp":gp} for i in range(batch_size)]))
     # Clip output to make sure it lies within the bounds. Due to floating
     # point technicalities this is not always the case.
-    return np.clip(x_max, bounds[:, 0], bounds[:, 1])
+    return np.clip(result, bounds[:, 0], bounds[:, 1])
 
 
 class UtilityFunction(object):
@@ -113,8 +127,7 @@ class UtilityFunction(object):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             mean, std = gp.predict(x, return_std=True)
-
-        return mean + kappa * std
+        return mean.squeeze() + kappa * std
 
     @staticmethod
     def _ei(x, gp, y_max, xi):
@@ -122,7 +135,7 @@ class UtilityFunction(object):
             warnings.simplefilter("ignore")
             mean, std = gp.predict(x, return_std=True)
   
-        a = (mean - y_max - xi)
+        a = (mean.squeeze() - y_max - xi)
         z = a / std
         return a * norm.cdf(z) + std * norm.pdf(z)
 
